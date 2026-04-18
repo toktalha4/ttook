@@ -331,7 +331,7 @@ export default function ChartPage() {
     };
 
     loadSignal();
-    const timer = window.setInterval(() => { loadSignal(); }, 5000);
+const timer = window.setInterval(() => { loadSignal(); }, 5000);
 
     return () => clearInterval(timer);
   }, [market, symbol]);
