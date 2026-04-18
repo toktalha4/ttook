@@ -1,0 +1,515 @@
+﻿from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from .stream_cache import get_stream_status, start_stream_cache
+from pydantic import BaseModel
+from urllib.parse import urlencode
+from urllib.request import urlopen
+from pathlib import Path
+import sqlite3
+import json
+from .ai_room_v2 import build_ai_coin, build_ai_room_feed, build_ai_room_symbols
+from .whales_v2 import build_whales_v2
+from .radar_v2 import build_radar_v2
+from .live_rooms import build_ai_live, build_radar_live, build_spot_longterm_live, build_whales_live
+from datetime import datetime, timezone
+
+app = FastAPI(title="TTOOK API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+SPOT_BASE = "https://data-api.binance.vision"
+FUTURES_BASE = "https://fapi.binance.com"
+
+ALLOWED_INTERVALS = {
+    "1m", "3m", "5m", "15m", "30m",
+    "1h", "2h", "4h", "6h", "8h", "12h",
+    "1d", "3d", "1w", "1M"
+}
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+DB_PATH = DATA_DIR / "ttook.db"
+
+
+class SignalIn(BaseModel):
+    symbol: str
+    market: str
+    direction: str
+    entry: float
+    tp1: float
+    tp2: float
+    tp3: float
+    stop: float
+    confidence: int
+    setup: str
+    exchange: str
+    source: str = "manual"
+    note: str | None = None
+
+
+class CloseSignalIn(BaseModel):
+    symbol: str
+    market: str
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_market(value: str) -> str:
+    value = value.strip().lower()
+    if value not in {"spot", "futures"}:
+        raise HTTPException(status_code=400, detail="Geçersiz market")
+    return value
+
+
+def normalize_direction(value: str) -> str:
+    value = value.strip().lower()
+    if value not in {"long", "short"}:
+        raise HTTPException(status_code=400, detail="Geçersiz direction")
+    return value
+
+
+def get_db():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            market TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            entry REAL NOT NULL,
+            tp1 REAL NOT NULL,
+            tp2 REAL NOT NULL,
+            tp3 REAL NOT NULL,
+            stop REAL NOT NULL,
+            confidence INTEGER NOT NULL,
+            setup TEXT NOT NULL,
+            exchange TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            note TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+@app.on_event("startup")
+def startup_event():
+    init_db()
+    start_stream_cache()
+
+
+def row_to_signal(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "symbol": row["symbol"],
+        "market": row["market"],
+        "direction": row["direction"],
+        "entry": row["entry"],
+        "tp1": row["tp1"],
+        "tp2": row["tp2"],
+        "tp3": row["tp3"],
+        "stop": row["stop"],
+        "confidence": row["confidence"],
+        "setup": row["setup"],
+        "exchange": row["exchange"],
+        "source": row["source"],
+        "note": row["note"],
+        "is_active": bool(row["is_active"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def fetch_json(url: str):
+    try:
+        with urlopen(url, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Veri alınamadı: {exc}")
+
+
+def fetch_spot_symbols():
+    data = fetch_json(f"{SPOT_BASE}/api/v3/exchangeInfo")
+    symbols = data.get("symbols", [])
+
+    items = []
+    for row in symbols:
+        if row.get("status") != "TRADING":
+            continue
+
+        symbol = row.get("symbol", "")
+        if not symbol:
+            continue
+
+        items.append({
+            "symbol": symbol,
+            "displaySymbol": symbol,
+            "baseAsset": row.get("baseAsset", ""),
+            "quoteAsset": row.get("quoteAsset", ""),
+            "market": "spot",
+        })
+
+    items.sort(key=lambda x: x["symbol"])
+    return items
+
+
+def fetch_futures_symbols():
+    data = fetch_json(f"{FUTURES_BASE}/fapi/v1/exchangeInfo")
+    symbols = data.get("symbols", [])
+
+    items = []
+    for row in symbols:
+        if row.get("status") != "TRADING":
+            continue
+        if row.get("contractType") != "PERPETUAL":
+            continue
+        if row.get("quoteAsset") != "USDT":
+            continue
+
+        symbol = row.get("symbol", "")
+        if not symbol:
+            continue
+
+        items.append({
+            "symbol": symbol,
+            "displaySymbol": f"{symbol}.P",
+            "baseAsset": row.get("baseAsset", ""),
+            "quoteAsset": row.get("quoteAsset", ""),
+            "market": "futures",
+        })
+
+    items.sort(key=lambda x: x["symbol"])
+    return items
+
+
+def fetch_klines(market: str, symbol: str, interval: str, limit: int):
+    symbol = symbol.upper().strip()
+    interval = interval.strip()
+
+    if interval not in ALLOWED_INTERVALS:
+        raise HTTPException(status_code=400, detail="Desteklenmeyen interval")
+
+    limit = max(10, min(limit, 1000))
+
+    if market == "spot":
+        base = SPOT_BASE
+        path = "/api/v3/klines"
+    elif market == "futures":
+        base = FUTURES_BASE
+        path = "/fapi/v1/klines"
+    else:
+        raise HTTPException(status_code=400, detail="Geçersiz market")
+
+    params = urlencode({
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit,
+    })
+
+    url = f"{base}{path}?{params}"
+    raw = fetch_json(url)
+
+    candles = []
+    for row in raw:
+        candles.append({
+            "openTime": int(row[0]),
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": float(row[5]),
+            "closeTime": int(row[6]),
+        })
+
+    return candles
+
+
+@app.get("/")
+def root():
+    return {"ok": True, "app": "TTOOK API"}
+
+
+
+@app.get("/system-status")
+def system_status():
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM signals WHERE is_active = 1"
+    ).fetchone()
+    conn.close()
+
+    return {
+        "ok": True,
+        "serverTime": now_iso(),
+        "activeSignals": int(row["c"] if row else 0),
+        "streams": get_stream_status(),
+    }
+
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+
+@app.get("/symbols")
+def symbols(
+    market: str = Query(default="spot"),
+    limit: int = Query(default=5000, ge=1, le=5000),
+):
+    market = normalize_market(market)
+
+    if market == "spot":
+        items = fetch_spot_symbols()
+    else:
+        items = fetch_futures_symbols()
+
+    return {
+        "market": market,
+        "items": items[:limit],
+    }
+
+
+@app.get("/klines")
+def klines(
+    market: str = Query(default="spot"),
+    symbol: str = Query(default="BTCUSDT"),
+    interval: str = Query(default="15m"),
+    limit: int = Query(default=300, ge=10, le=1000),
+):
+    market = normalize_market(market)
+
+    candles = fetch_klines(
+        market=market,
+        symbol=symbol,
+        interval=interval,
+        limit=limit,
+    )
+    return {
+        "market": market,
+        "symbol": symbol.upper(),
+        "interval": interval,
+        "candles": candles,
+    }
+
+
+@app.get("/signals")
+def signals():
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM signals
+        WHERE is_active = 1
+        ORDER BY updated_at DESC, id DESC
+        """
+    ).fetchall()
+    conn.close()
+
+    return {
+        "items": [row_to_signal(row) for row in rows]
+    }
+
+
+@app.get("/signals/active")
+def active_signal(
+    market: str = Query(...),
+    symbol: str = Query(...),
+):
+    market = normalize_market(market)
+    symbol = symbol.upper().strip()
+
+    conn = get_db()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM signals
+        WHERE is_active = 1
+          AND market = ?
+          AND symbol = ?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+        """,
+        (market, symbol),
+    ).fetchone()
+    conn.close()
+
+    return {
+        "item": row_to_signal(row) if row else None
+    }
+
+
+@app.post("/signals/upsert")
+def signals_upsert(payload: SignalIn):
+    market = normalize_market(payload.market)
+    direction = normalize_direction(payload.direction)
+    symbol = payload.symbol.upper().strip()
+    ts = now_iso()
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        UPDATE signals
+        SET is_active = 0, updated_at = ?
+        WHERE is_active = 1
+          AND market = ?
+          AND symbol = ?
+        """,
+        (ts, market, symbol),
+    )
+
+    cur = conn.execute(
+        """
+        INSERT INTO signals (
+            symbol, market, direction,
+            entry, tp1, tp2, tp3, stop,
+            confidence, setup, exchange,
+            source, note, is_active,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            symbol,
+            market,
+            direction,
+            payload.entry,
+            payload.tp1,
+            payload.tp2,
+            payload.tp3,
+            payload.stop,
+            payload.confidence,
+            payload.setup,
+            payload.exchange,
+            payload.source,
+            payload.note,
+            ts,
+            ts,
+        ),
+    )
+
+    signal_id = cur.lastrowid
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT * FROM signals WHERE id = ?",
+        (signal_id,),
+    ).fetchone()
+    conn.close()
+
+    return {
+        "ok": True,
+        "item": row_to_signal(row),
+    }
+
+
+@app.post("/signals/close")
+def signals_close(payload: CloseSignalIn):
+    market = normalize_market(payload.market)
+    symbol = payload.symbol.upper().strip()
+    ts = now_iso()
+
+    conn = get_db()
+    conn.execute(
+        """
+        UPDATE signals
+        SET is_active = 0, updated_at = ?
+        WHERE is_active = 1
+          AND market = ?
+          AND symbol = ?
+        """,
+        (ts, market, symbol),
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "market": market,
+    }
+
+
+@app.post("/signals/clear")
+def signals_clear():
+    conn = get_db()
+    conn.execute(
+        "UPDATE signals SET is_active = 0, updated_at = ? WHERE is_active = 1",
+        (now_iso(),),
+    )
+    conn.commit()
+    conn.close()
+
+    return {"ok": True}
+
+
+@app.get("/radar")
+def radar():
+    return {
+        "market": "futures",
+        "items": build_radar_v2(),
+    }
+
+@app.get("/whales")
+def whales():
+    return {
+        "market": "futures",
+        "items": build_whales_v2(),
+    }
+
+@app.get("/ai")
+def ai():
+    return {
+        "market": "futures",
+        "items": build_ai_room_feed(),
+    }
+
+
+@app.get("/ai-symbols")
+def ai_symbols():
+    return {
+        "market": "futures",
+        "items": build_ai_room_symbols(),
+    }
+
+
+@app.get("/ai-coin")
+def ai_coin(
+    symbol: str = Query(default="TRBUSDT"),
+):
+    item = build_ai_coin(symbol)
+    return {
+        "market": "futures",
+        "item": item,
+    }
+
+
+@app.get("/spot-longterm")
+def spot_longterm():
+    return {
+        "market": "spot",
+        "items": build_spot_longterm_live(),
+    }
