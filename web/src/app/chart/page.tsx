@@ -357,7 +357,7 @@ const timer = window.setInterval(() => { loadSignal(); }, 5000);
     };
 
     loadAiMeta();
-    const timer = setInterval(loadAiMeta, 15000);
+    const timer = window.setInterval(() => { loadAiMeta(); }, 15000);
 
     return () => clearInterval(timer);
   }, [market, symbol]);
