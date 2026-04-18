@@ -1,7 +1,9 @@
 ﻿'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 type AiSymbol = {
   symbol: string;
@@ -172,7 +174,7 @@ ${item.liquidation
 ⚠️ ${item.disclaimer}`;
 }
 
-export default function AiPage() {
+function AiPageInner() {
   const searchParams = useSearchParams();
 
   const [symbols, setSymbols] = useState<AiSymbol[]>([]);
@@ -191,7 +193,7 @@ export default function AiPage() {
   }, [searchParams]);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/ai-symbols', { cache: 'no-store' })
+    fetch(`${API_BASE}/ai-symbols`, { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error('AI sembolleri alınamadı');
         return res.json();
@@ -213,7 +215,7 @@ export default function AiPage() {
     const load = (first = false) => {
       if (first) setLoading(true);
 
-      fetch(`http://127.0.0.1:8000/ai-coin?symbol=${selected}`, { cache: 'no-store' })
+      fetch(`${API_BASE}/ai-coin?symbol=${selected}`, { cache: 'no-store' })
         .then((res) => {
           if (!res.ok) throw new Error('AI coin analizi alınamadı');
           return res.json();
@@ -474,5 +476,21 @@ export default function AiPage() {
         </>
       )}
     </main>
+  );
+}
+
+export default function AiPage() {
+  return (
+    <Suspense
+      fallback={
+        <main>
+          <div className="ttook-card">
+            <div className="ttook-muted">AI Odası yükleniyor...</div>
+          </div>
+        </main>
+      }
+    >
+      <AiPageInner />
+    </Suspense>
   );
 }
