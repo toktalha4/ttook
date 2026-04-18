@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+
 type SpotItem = {
   symbol: string;
   bias: string;
@@ -23,7 +25,7 @@ export default function SpotPage() {
     const load = (first = false) => {
       if (first) setLoading(true);
 
-      fetch('http://127.0.0.1:8000/spot-longterm', { cache: 'no-store' })
+      fetch(`${API_BASE}/spot-longterm`, { cache: 'no-store' })
         .then((res) => {
           if (!res.ok) throw new Error('Spot uzun vade verisi alınamadı');
           return res.json();

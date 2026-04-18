@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+
 type RadarItem = {
   symbol: string;
   displaySymbol: string;
@@ -80,9 +82,9 @@ export default function HomePage() {
       if (first) setLoading(true);
 
       Promise.all([
-        fetch('http://127.0.0.1:8000/alarm-center', { cache: 'no-store' }).then((r) => r.json()),
-        fetch('http://127.0.0.1:8000/system-status', { cache: 'no-store' }).then((r) => r.json()),
-        fetch('http://127.0.0.1:8000/alarm-history?limit=10', { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`${API_BASE}/alarm-center`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`${API_BASE}/system-status`, { cache: 'no-store' }).then((r) => r.json()),
+        fetch(`${API_BASE}/alarm-history?limit=10`, { cache: 'no-store' }).then((r) => r.json()),
       ])
         .then(([alarmCenter, sys, hist]) => {
           if (!cancelled) {

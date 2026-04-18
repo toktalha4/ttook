@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+
 type AlarmItem = {
   id: number;
   symbol: string;
@@ -83,7 +85,7 @@ export default function AlarmsPage() {
     const load = (first = false) => {
       if (first) setLoading(true);
 
-      fetch('http://127.0.0.1:8000/alarm-history?limit=50', { cache: 'no-store' })
+      fetch(`${API_BASE}/alarm-history?limit=50`, { cache: 'no-store' })
         .then((res) => {
           if (!res.ok) throw new Error('Alarm geçmişi alınamadı');
           return res.json();

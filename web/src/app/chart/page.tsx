@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   CandlestickSeries,
@@ -72,7 +72,7 @@ function pressureClass(pressure: string | undefined) {
   return 'whale';
 }
 
-export default function ChartPage() {
+function ChartPageInner() {
   const searchParams = useSearchParams();
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -588,5 +588,22 @@ const timer = window.setInterval(() => { loadSignal(); }, 5000);
         </div>
       </div>
     </main>
+  );
+}
+
+
+export default function ChartPage() {
+  return (
+    <Suspense
+      fallback={
+        <main>
+          <div className="ttook-card">
+            <div className="ttook-muted">Sayfa yükleniyor...</div>
+          </div>
+        </main>
+      }
+    >
+      <ChartPageInner />
+    </Suspense>
   );
 }

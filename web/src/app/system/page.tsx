@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+
 type SystemStatus = {
   ok: boolean;
   serverTime: string;
@@ -26,7 +28,7 @@ export default function SystemPage() {
 
   useEffect(() => {
     const load = () => {
-      fetch('http://127.0.0.1:8000/system-status', { cache: 'no-store' })
+      fetch(`${API_BASE}/system-status`, { cache: 'no-store' })
         .then((res) => {
           if (!res.ok) throw new Error('Durum alınamadı');
           return res.json();

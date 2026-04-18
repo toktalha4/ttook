@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+
 type WhaleItem = {
   symbol: string;
   displaySymbol: string;
@@ -29,7 +31,7 @@ export default function WhalesPage() {
     const load = (first = false) => {
       if (first) setLoading(true);
 
-      fetch('http://127.0.0.1:8000/whales', { cache: 'no-store' })
+      fetch(`${API_BASE}/whales`, { cache: 'no-store' })
         .then((res) => {
           if (!res.ok) throw new Error('Balina verisi alınamadı');
           return res.json();
