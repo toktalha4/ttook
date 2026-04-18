@@ -9,6 +9,8 @@ import {
   createChart,
 } from 'lightweight-charts';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+
 type Candle = {
   openTime: number;
   open: number;
@@ -189,7 +191,7 @@ export default function ChartPage() {
   useEffect(() => {
     setSymbolsLoading(true);
 
-    fetch(`http://127.0.0.1:8000/symbols?market=${market}&limit=5000`, { cache: 'no-store' })
+    fetch(`${API_BASE}/symbols?market=${market}&limit=5000`, { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error('Sembol listesi alınamadı');
         return res.json();
@@ -216,7 +218,7 @@ export default function ChartPage() {
     setError('');
 
     fetch(
-      `http://127.0.0.1:8000/klines?market=${market}&symbol=${symbol}&interval=${interval}&limit=300`,
+      `${API_BASE}/klines?market=${market}&symbol=${symbol}&interval=${interval}&limit=300`,
       { cache: 'no-store' }
     )
       .then((res) => {
@@ -309,7 +311,7 @@ export default function ChartPage() {
   useEffect(() => {
     const loadSignal = () => {
       fetch(
-        `http://127.0.0.1:8000/signals/active?market=${market}&symbol=${symbol}`,
+        `${API_BASE}/signals/active?market=${market}&symbol=${symbol}`,
         { cache: 'no-store' }
       )
         .then((res) => {
@@ -329,7 +331,7 @@ export default function ChartPage() {
     };
 
     loadSignal();
-    const timer = setInterval(loadSignal, 5000);
+    const timer = window.setInterval(() => { loadSignal(); }, 5000);
 
     return () => clearInterval(timer);
   }, [market, symbol]);
@@ -341,7 +343,7 @@ export default function ChartPage() {
     }
 
     const loadAiMeta = () => {
-      fetch(`http://127.0.0.1:8000/ai-coin?symbol=${symbol}`, { cache: 'no-store' })
+      fetch(`${API_BASE}/ai-coin?symbol=${symbol}`, { cache: 'no-store' })
         .then((res) => {
           if (!res.ok) throw new Error('AI meta alınamadı');
           return res.json();
