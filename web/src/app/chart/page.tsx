@@ -492,13 +492,15 @@ function ChartPageInner() {
       }))
     );
 
-    const makeLine = (color: string, width = 2) =>
-      chart.addSeries(LineSeries, {
-        color,
-        lineWidth: width,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
+    type SafeLineWidth = 1 | 2 | 3 | 4;
+
+const makeLine = (color: string, width: SafeLineWidth = 2) =>
+  chart.addSeries(LineSeries, {
+    color,
+    lineWidth: width,
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
 
     const seriesBag: any[] = [];
 
