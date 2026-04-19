@@ -78,15 +78,18 @@ function toNum(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function toNumArray(v: any): number[] {
-  const arr = Array.isArray(v)
+  function toNumArray(v: any): number[] {
+  const arr: unknown[] = Array.isArray(v)
     ? v
     : Array.isArray(v?.items)
     ? v.items
     : Array.isArray(v?.data)
     ? v.data
     : [];
-  return arr.map((x) => Number(x)).filter((x) => Number.isFinite(x));
+
+  return arr
+    .map((x: unknown) => Number(x))
+    .filter((x: number) => Number.isFinite(x));
 }
 
 function toText(v: any): string {
@@ -136,11 +139,12 @@ function normalizeAiData(raw: any): AiData {
   };
 }
 
-function listBlock(values?: number[]) {
+unction listBlock(values?: number[]) {
   if (!Array.isArray(values) || values.length === 0) return <div>-</div>;
+
   return (
     <div style={{ display: 'grid', gap: 6 }}>
-      {values.map((v, i) => (
+      {values.map((v: number, i: number) => (
         <div key={`${v}-${i}`}>- {fmtPrice(v)}</div>
       ))}
     </div>
