@@ -78,7 +78,7 @@ function toNum(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-  function toNumArray(v: any): number[] {
+    function toNumArray(v: any): number[] {
   const arr: unknown[] = Array.isArray(v)
     ? v
     : Array.isArray(v?.items)
@@ -139,7 +139,7 @@ function normalizeAiData(raw: any): AiData {
   };
 }
 
-unction listBlock(values?: number[]) {
+function listBlock(values?: number[]) {
   if (!Array.isArray(values) || values.length === 0) return <div>-</div>;
 
   return (
