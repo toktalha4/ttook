@@ -28,7 +28,7 @@ type FuturesPlan = {
 
 type AiData = {
   symbol?: string;
-  price?: number;
+  price?: number | null;
   trend?: string;
   momentum?: string;
   volatility?: string;
@@ -61,8 +61,83 @@ function compactLevels(values: Array<number | null | undefined>) {
     .join(' / ');
 }
 
-function sectionList(values?: number[]) {
-  if (!Array.isArray(values) || values.length === 0) return <div className="ttook-muted">-</div>;
+function unwrapObject(raw: any) {
+  return raw?.data ?? raw?.result ?? raw?.payload ?? raw?.item ?? raw ?? {};
+}
+
+function pick(obj: any, ...keys: string[]) {
+  for (const key of keys) {
+    const v = obj?.[key];
+    if (v !== undefined && v !== null) return v;
+  }
+  return null;
+}
+
+function toNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toNumArray(v: any): number[] {
+  const arr = Array.isArray(v)
+    ? v
+    : Array.isArray(v?.items)
+    ? v.items
+    : Array.isArray(v?.data)
+    ? v.data
+    : [];
+  return arr.map((x) => Number(x)).filter((x) => Number.isFinite(x));
+}
+
+function toText(v: any): string {
+  return typeof v === 'string' ? v : '';
+}
+
+function normalizeAiData(raw: any): AiData {
+  const j = unwrapObject(raw);
+  const liq = unwrapObject(j?.liquidityZones ?? j?.liquidity_zones ?? j?.liquidity ?? {});
+  const fut = unwrapObject(j?.futuresPlan ?? j?.futures_plan ?? j?.futures ?? {});
+  const spot = unwrapObject(j?.spotPlan ?? j?.spot_plan ?? j?.spot ?? {});
+
+  return {
+    symbol: toText(pick(j, 'symbol', 'ticker', 'pair')) || undefined,
+    price: toNum(pick(j, 'price', 'lastPrice', 'last_price', 'currentPrice', 'current_price', 'close')),
+    trend: toText(pick(j, 'trend', 'trendLabel', 'trend_label')) || '-',
+    momentum: toText(pick(j, 'momentum', 'momentumLabel', 'momentum_label')) || '-',
+    volatility: toText(pick(j, 'volatility', 'volatilityLabel', 'volatility_label')) || '-',
+    supports: toNumArray(pick(j, 'supports', 'support_levels', 'supports_list')),
+    resistances: toNumArray(pick(j, 'resistances', 'resistance_levels', 'resistances_list')),
+    liquidityZones: {
+      topStopHunt: toNum(pick(liq, 'topStopHunt', 'top_stop_hunt', 'upperStopHunt', 'upper_stop_hunt')),
+      bottomSweep: toNum(pick(liq, 'bottomSweep', 'bottom_sweep', 'lowerSweep', 'lower_sweep')),
+    },
+    whaleLevels: toNumArray(pick(j, 'whaleLevels', 'whale_levels')),
+    futuresPlan: {
+      bias: toText(pick(fut, 'bias', 'direction', 'side')) || '-',
+      entryLow: toNum(pick(fut, 'entryLow', 'entry_low', 'buyLow', 'buy_low', 'entry1')),
+      entryHigh: toNum(pick(fut, 'entryHigh', 'entry_high', 'buyHigh', 'buy_high', 'entry2')),
+      tp1: toNum(pick(fut, 'tp1', 'takeProfit1', 'take_profit_1')),
+      tp2: toNum(pick(fut, 'tp2', 'takeProfit2', 'take_profit_2')),
+      tp3: toNum(pick(fut, 'tp3', 'takeProfit3', 'take_profit_3')),
+      stop: toNum(pick(fut, 'stop', 'sl', 'stop_loss')),
+    },
+    spotPlan: {
+      enabled: Boolean(pick(spot, 'enabled')),
+      note: toText(pick(spot, 'note', 'message')),
+      buy1: toNum(pick(spot, 'buy1', 'entry1', 'buy_1')),
+      buy2: toNum(pick(spot, 'buy2', 'entry2', 'buy_2')),
+      buy3: toNum(pick(spot, 'buy3', 'entry3', 'buy_3')),
+      sell1: toNum(pick(spot, 'sell1', 'tp1', 'takeProfit1', 'take_profit_1')),
+      sell2: toNum(pick(spot, 'sell2', 'tp2', 'takeProfit2', 'take_profit_2')),
+      invalid: toNum(pick(spot, 'invalid', 'stop', 'breakdown', 'stop_loss')),
+    },
+    aiComment: toText(pick(j, 'aiComment', 'ai_comment', 'comment', 'summary', 'analysis')) || 'Yorum üretilmedi.',
+    disclaimer: toText(pick(j, 'disclaimer', 'warning', 'note')) || 'Bu finansal tavsiye değildir. Eğitim amaçlı AI yorumudur.',
+  };
+}
+
+function listBlock(values?: number[]) {
+  if (!Array.isArray(values) || values.length === 0) return <div>-</div>;
   return (
     <div style={{ display: 'grid', gap: 6 }}>
       {values.map((v, i) => (
@@ -97,7 +172,8 @@ function AiPageInner() {
         const res = await fetch(`${API_BASE}/ai-coin?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`AI endpoint failed: ${res.status}`);
         const json = await res.json();
-        if (active) setData(json);
+        const mapped = normalizeAiData(json);
+        if (active) setData(mapped);
       } catch (e: any) {
         if (active) {
           setError(e?.message || 'AI verisi alınamadı');
@@ -109,9 +185,7 @@ function AiPageInner() {
     }
 
     load();
-    const timer = window.setInterval(() => {
-      load();
-    }, 15000);
+    const timer = window.setInterval(load, 15000);
 
     return () => {
       active = false;
@@ -182,31 +256,25 @@ function AiPageInner() {
           <div className="ttook-grid" style={{ marginTop: 16 }}>
             <div className="ttook-card">
               <div className="ttook-card-title">🧱 Destekler</div>
-              <div style={{ marginTop: 10 }}>{sectionList(data.supports)}</div>
+              <div style={{ marginTop: 10 }}>{listBlock(data.supports)}</div>
             </div>
 
             <div className="ttook-card">
               <div className="ttook-card-title">🚧 Dirençler</div>
-              <div style={{ marginTop: 10 }}>{sectionList(data.resistances)}</div>
+              <div style={{ marginTop: 10 }}>{listBlock(data.resistances)}</div>
             </div>
           </div>
 
           <div className="ttook-card" style={{ marginTop: 16 }}>
             <div className="ttook-card-title">🐋 Balina Seviyeleri</div>
-            <div style={{ marginTop: 10 }}>{sectionList(data.whaleLevels)}</div>
+            <div style={{ marginTop: 10 }}>{listBlock(data.whaleLevels)}</div>
           </div>
 
           <div className="ttook-card" style={{ marginTop: 16 }}>
             <div className="ttook-card-title">🎯 Futures Planı</div>
             <div style={{ marginTop: 10 }}>Bias: {data.futuresPlan?.bias || '-'}</div>
-            <div>
-              Giriş alanı:{' '}
-              {compactLevels([data.futuresPlan?.entryLow, data.futuresPlan?.entryHigh]) || '-'}
-            </div>
-            <div>
-              TP:{' '}
-              {compactLevels([data.futuresPlan?.tp1, data.futuresPlan?.tp2, data.futuresPlan?.tp3]) || '-'}
-            </div>
+            <div>Giriş alanı: {compactLevels([data.futuresPlan?.entryLow, data.futuresPlan?.entryHigh]) || '-'}</div>
+            <div>TP: {compactLevels([data.futuresPlan?.tp1, data.futuresPlan?.tp2, data.futuresPlan?.tp3]) || '-'}</div>
             <div>Stop: {fmtPrice(data.futuresPlan?.stop)}</div>
           </div>
 
@@ -217,12 +285,10 @@ function AiPageInner() {
               {data.spotPlan.enabled ? (
                 <>
                   <div style={{ marginTop: 10 }}>
-                    - Kademeli alım:{' '}
-                    {compactLevels([data.spotPlan.buy1, data.spotPlan.buy2, data.spotPlan.buy3]) || '-'}
+                    - Kademeli alım: {compactLevels([data.spotPlan.buy1, data.spotPlan.buy2, data.spotPlan.buy3]) || '-'}
                   </div>
                   <div>
-                    - Kar alma:{' '}
-                    {compactLevels([data.spotPlan.sell1, data.spotPlan.sell2]) || '-'}
+                    - Kar alma: {compactLevels([data.spotPlan.sell1, data.spotPlan.sell2]) || '-'}
                   </div>
                   <div>- Yapı bozulursa dikkat: {fmtPrice(data.spotPlan.invalid)}</div>
                 </>
@@ -231,14 +297,11 @@ function AiPageInner() {
                   <div style={{ marginTop: 10 }}>
                     - {data.spotPlan.note || 'Spot plan net değil, uygun yapı bulunamadı.'}
                   </div>
-
                   {compactLevels([data.spotPlan.buy1, data.spotPlan.buy2, data.spotPlan.buy3]) ? (
                     <div>
-                      - İzleme alımı:{' '}
-                      {compactLevels([data.spotPlan.buy1, data.spotPlan.buy2, data.spotPlan.buy3])}
+                      - İzleme alımı: {compactLevels([data.spotPlan.buy1, data.spotPlan.buy2, data.spotPlan.buy3])}
                     </div>
                   ) : null}
-
                   <div>- Yapı bozulursa dikkat: {fmtPrice(data.spotPlan.invalid)}</div>
                 </>
               )}
@@ -264,13 +327,7 @@ function AiPageInner() {
 
 export default function AiPage() {
   return (
-    <Suspense
-      fallback={
-        <main className="ttook-page">
-          <div className="ttook-card">AI odası yükleniyor...</div>
-        </main>
-      }
-    >
+    <Suspense fallback={<main className="ttook-page"><div className="ttook-card">AI odası yükleniyor...</div></main>}>
       <AiPageInner />
     </Suspense>
   );

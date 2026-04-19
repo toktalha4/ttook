@@ -1,5 +1,4 @@
-﻿
-'use client';
+﻿'use client';
 
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
@@ -24,6 +23,8 @@ type BiasResult = {
   reason: string;
 };
 
+type SafeLineWidth = 1 | 2 | 3 | 4;
+
 function fmtPrice(v?: number | null) {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return '-';
   const n = Number(v);
@@ -31,6 +32,57 @@ function fmtPrice(v?: number | null) {
   if (Math.abs(n) >= 1) return n.toFixed(4);
   if (Math.abs(n) >= 0.01) return n.toFixed(5);
   return n.toFixed(8);
+}
+
+function unwrapList(raw: any) {
+  if (Array.isArray(raw)) return raw;
+  for (const key of ['items', 'data', 'result', 'rows', 'symbols', 'klines', 'candles']) {
+    if (Array.isArray(raw?.[key])) return raw[key];
+  }
+  return [];
+}
+
+function normalizeSymbolList(raw: any): string[] {
+  const arr = unwrapList(raw);
+  return arr
+    .map((x: any) => {
+      if (typeof x === 'string') return x;
+      return x?.symbol || x?.code || x?.pair || x?.ticker || x?.name || '';
+    })
+    .filter(Boolean);
+}
+
+function normalizeCandles(raw: any): Candle[] {
+  const arr = unwrapList(raw);
+  return arr
+    .map((x: any) => {
+      if (Array.isArray(x)) {
+        return {
+          time: Number(x[0]),
+          open: Number(x[1]),
+          high: Number(x[2]),
+          low: Number(x[3]),
+          close: Number(x[4]),
+          volume: Number(x[5] || 0),
+        };
+      }
+      return {
+        time: Number(x.time ?? x.ts ?? x.openTime ?? x.open_time ?? x.timestamp ?? x.t ?? 0),
+        open: Number(x.open ?? x.o),
+        high: Number(x.high ?? x.h),
+        low: Number(x.low ?? x.l),
+        close: Number(x.close ?? x.c),
+        volume: Number(x.volume ?? x.v ?? 0),
+      };
+    })
+    .filter(
+      (x: Candle) =>
+        Number.isFinite(x.time) &&
+        Number.isFinite(x.open) &&
+        Number.isFinite(x.high) &&
+        Number.isFinite(x.low) &&
+        Number.isFinite(x.close)
+    );
 }
 
 function lastNum(values: NumArr) {
@@ -89,7 +141,6 @@ function calcRSI(values: number[], period = 14): NumArr {
 
   let avgGain = gains / period;
   let avgLoss = losses / period;
-
   out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
 
   for (let i = period + 1; i < values.length; i++) {
@@ -156,14 +207,12 @@ function calcVWAP(candles: Candle[]) {
   let cumulativePV = 0;
   let cumulativeV = 0;
   const out: NumArr = [];
-
   for (const c of candles) {
     const typical = (c.high + c.low + c.close) / 3;
     cumulativePV += typical * c.volume;
     cumulativeV += c.volume;
     out.push(cumulativeV > 0 ? cumulativePV / cumulativeV : null);
   }
-
   return out;
 }
 
@@ -255,48 +304,7 @@ function buildBias(closes: number[]): BiasResult {
   else if (score <= -3) label = 'Güçlü Short';
   else if (score <= -1) label = 'Hafif Short';
 
-  return {
-    label,
-    score,
-    reason: reasons.join(' • '),
-  };
-}
-
-function normalizeSymbolList(raw: any): string[] {
-  const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.symbols) ? raw.symbols : [];
-  return arr
-    .map((x: any) => {
-      if (typeof x === 'string') return x;
-      return x?.symbol || x?.code || x?.name || '';
-    })
-    .filter(Boolean);
-}
-
-function normalizeCandles(raw: any): Candle[] {
-  const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.items) ? raw.items : [];
-  return arr
-    .map((x: any) => {
-      if (Array.isArray(x)) {
-        return {
-          time: Number(x[0]),
-          open: Number(x[1]),
-          high: Number(x[2]),
-          low: Number(x[3]),
-          close: Number(x[4]),
-          volume: Number(x[5] || 0),
-        };
-      }
-
-      return {
-        time: Number(x.time ?? x.ts ?? x.openTime ?? 0),
-        open: Number(x.open),
-        high: Number(x.high),
-        low: Number(x.low),
-        close: Number(x.close),
-        volume: Number(x.volume ?? 0),
-      };
-    })
-    .filter((x: Candle) => Number.isFinite(x.time) && Number.isFinite(x.close));
+  return { label, score, reason: reasons.join(' • ') };
 }
 
 function ChartPageInner() {
@@ -342,9 +350,10 @@ function ChartPageInner() {
 
   const filteredSymbols = useMemo(() => {
     const q = search.trim().toUpperCase();
-    if (!q) return symbols.slice(0, 50);
-    return symbols.filter((s) => s.includes(q)).slice(0, 50);
-  }, [symbols, search]);
+    const base = symbols.length ? symbols : [symbol];
+    if (!q) return base.slice(0, 50);
+    return base.filter((s) => s.includes(q)).slice(0, 50);
+  }, [symbols, search, symbol]);
 
   const indicatorSummary = useMemo(() => {
     return {
@@ -370,7 +379,8 @@ function ChartPageInner() {
         const res = await fetch(`${API_BASE}/symbols?market=${market}&limit=500`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`symbols failed: ${res.status}`);
         const json = await res.json();
-        setSymbols(normalizeSymbolList(json));
+        const next = normalizeSymbolList(json);
+        setSymbols(next);
       } catch {
         setSymbols([]);
       }
@@ -406,7 +416,8 @@ function ChartPageInner() {
         let nextSignals = 0;
         if (signalsRes && signalsRes.ok) {
           const sigJson = await signalsRes.json();
-          nextSignals = Array.isArray(sigJson) ? sigJson.length : Array.isArray(sigJson?.items) ? sigJson.items.length : 0;
+          const sigArr = unwrapList(sigJson);
+          nextSignals = Array.isArray(sigArr) ? sigArr.length : 0;
         }
 
         if (active) {
@@ -473,12 +484,8 @@ function ChartPageInner() {
       },
       width: chartRef.current.clientWidth,
       height: 460,
-      rightPriceScale: {
-        borderVisible: false,
-      },
-      timeScale: {
-        borderVisible: false,
-      },
+      rightPriceScale: { borderVisible: false },
+      timeScale: { borderVisible: false },
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {});
@@ -492,34 +499,32 @@ function ChartPageInner() {
       }))
     );
 
-    type SafeLineWidth = 1 | 2 | 3 | 4;
+    const makeLine = (color: string, width: SafeLineWidth = 2) =>
+      chart.addSeries(LineSeries, {
+        color,
+        lineWidth: width,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
 
-const makeLine = (color: string, width: SafeLineWidth = 2) =>
-  chart.addSeries(LineSeries, {
-    color,
-    lineWidth: width,
-    priceLineVisible: false,
-    lastValueVisible: false,
-  });
-
-    const seriesBag: any[] = [];
+    const createdSeries: any[] = [];
 
     if (showEMA20) {
       const s = makeLine('#22c55e', 2);
       s.setData(candles.map((c, i) => ({ time: c.time as any, value: ema20[i] })).filter((x) => x.value != null) as any);
-      seriesBag.push(s);
+      createdSeries.push(s);
     }
 
     if (showEMA50) {
       const s = makeLine('#60a5fa', 2);
       s.setData(candles.map((c, i) => ({ time: c.time as any, value: ema50[i] })).filter((x) => x.value != null) as any);
-      seriesBag.push(s);
+      createdSeries.push(s);
     }
 
     if (showEMA200) {
       const s = makeLine('#f59e0b', 2);
       s.setData(candles.map((c, i) => ({ time: c.time as any, value: ema200[i] })).filter((x) => x.value != null) as any);
-      seriesBag.push(s);
+      createdSeries.push(s);
     }
 
     if (showBoll) {
@@ -531,13 +536,13 @@ const makeLine = (color: string, width: SafeLineWidth = 2) =>
       mid.setData(candles.map((c, i) => ({ time: c.time as any, value: boll.mid[i] })).filter((x) => x.value != null) as any);
       lower.setData(candles.map((c, i) => ({ time: c.time as any, value: boll.lower[i] })).filter((x) => x.value != null) as any);
 
-      seriesBag.push(upper, mid, lower);
+      createdSeries.push(upper, mid, lower);
     }
 
     if (showVWAP) {
       const s = makeLine('#06b6d4', 2);
       s.setData(candles.map((c, i) => ({ time: c.time as any, value: vwap[i] })).filter((x) => x.value != null) as any);
-      seriesBag.push(s);
+      createdSeries.push(s);
     }
 
     chart.timeScale().fitContent();
@@ -550,11 +555,11 @@ const makeLine = (color: string, width: SafeLineWidth = 2) =>
 
     return () => {
       ro.disconnect();
-      seriesBag.forEach((s) => {
+      for (const s of createdSeries) {
         try {
           chart.removeSeries(s);
         } catch {}
-      });
+      }
       chart.remove();
     };
   }, [candles, ema20, ema50, ema200, boll, vwap, showEMA20, showEMA50, showEMA200, showBoll, showVWAP]);
@@ -582,7 +587,6 @@ const makeLine = (color: string, width: SafeLineWidth = 2) =>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           <button className="ttook-button" onClick={() => setMarket('spot')}>Spot</button>
           <button className="ttook-button" onClick={() => setMarket('futures')}>Futures (USDT.P)</button>
-
           <button className="ttook-button" onClick={() => setIntervalState('1m')}>1m</button>
           <button className="ttook-button" onClick={() => setIntervalState('5m')}>5m</button>
           <button className="ttook-button" onClick={() => setIntervalState('15m')}>15m</button>
@@ -617,11 +621,7 @@ const makeLine = (color: string, width: SafeLineWidth = 2) =>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           {filteredSymbols.slice(0, 30).map((s) => (
-            <button
-              key={s}
-              className="ttook-chip"
-              onClick={() => applySymbol(s)}
-            >
+            <button key={s} className="ttook-chip" onClick={() => applySymbol(s)}>
               {s}
             </button>
           ))}
@@ -693,13 +693,7 @@ const makeLine = (color: string, width: SafeLineWidth = 2) =>
 
 export default function ChartPage() {
   return (
-    <Suspense
-      fallback={
-        <main className="ttook-page">
-          <div className="ttook-card">Grafik yükleniyor...</div>
-        </main>
-      }
-    >
+    <Suspense fallback={<main className="ttook-page"><div className="ttook-card">Grafik yükleniyor...</div></main>}>
       <ChartPageInner />
     </Suspense>
   );
